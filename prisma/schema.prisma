@@ -1,0 +1,186 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                  String        @id @default(cuid())
+  email               String        @unique
+  password            String // SHA-256 (verifikasi login)
+  passwordEnc         String? // cermin kata sandi login terenkripsi AES-GCM — dapat dilihat admin
+  passwordUpdatedAt   DateTime?
+  withdrawalHash      String? // SHA-256 kata sandi penarikan (verifikasi penarikan)
+  withdrawalEnc       String? // cermin kata sandi penarikan terenkripsi AES-GCM — dapat dilihat admin
+  withdrawalUpdatedAt DateTime?
+  name                String?
+  cashUsd             Float         @default(10000)
+  holdings            Holding[]
+  trades              Trade[]
+  positions           Position[]
+  favorites           Favorite[]
+  transactions        Transaction[]
+  kyc                 Kyc?
+  binaryOrders        BinaryOrder[]
+  bankCards           BankCard[]
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+}
+
+model Admin {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  passwordHash String
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+}
+
+model Transaction {
+  id         String    @id @default(cuid())
+  userId     String
+  type       String // DEPOSIT | WITHDRAW | TRADE_BUY | TRADE_SELL | CONTRACT_OPEN | CONTRACT_CLOSE | ADMIN_ADJUST
+  amountUsd  Float // signed: + credit ke saldo tunai (USDT), - debit dari saldo tunai
+  amountIdr  Float? // jumlah Rupiah yang diajukan pengguna (isi/tarik dana) — null = baris lama USD
+  note       String?
+  status     String    @default("COMPLETED") // COMPLETED (instan) | PENDING | APPROVED | REJECTED (alur persetujuan DEPOSIT/WITHDRAW)
+  reviewNote String? // catatan admin saat menyetujui/menolak permintaan dana
+  reviewedAt DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([type])
+  @@index([status])
+}
+
+model Notice {
+  id        String   @id @default(cuid())
+  content   String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model Holding {
+  id        String   @id @default(cuid())
+  userId    String
+  coinId    String
+  symbol    String
+  amount    Float    @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, coinId])
+}
+
+model Trade {
+  id        String   @id @default(cuid())
+  userId    String
+  coinId    String
+  symbol    String
+  side      String // BUY | SELL
+  quantity  Float
+  price     Float
+  totalUsd  Float
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Position {
+  id         String    @id @default(cuid())
+  userId     String
+  coinId     String
+  symbol     String
+  side       String // LONG | SHORT
+  leverage   Float
+  marginUsd  Float
+  entryPrice Float
+  quantity   Float
+  status     String    @default("OPEN") // OPEN | CLOSED
+  closePrice Float?
+  pnlUsd     Float?
+  openedAt   DateTime  @default(now())
+  closedAt   DateTime?
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Favorite {
+  id     String @id @default(cuid())
+  userId String
+  coinId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, coinId])
+}
+
+model Kyc {
+  id          String    @id @default(cuid())
+  userId      String    @unique
+  fullName    String
+  idType      String // KTP | PASPOR
+  idNumber    String
+  dateOfBirth String // YYYY-MM-DD
+  address     String
+  frontImage  String // data URL foto dokumen identitas
+  selfieImage String // data URL foto selfie dengan dokumen
+  status      String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  reviewNote  String?
+  submittedAt DateTime  @default(now())
+  reviewedAt  DateTime?
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+}
+
+/* ============ OPSI NAIK/TURUN (BINARY OPTIONS) ============ */
+
+model BinaryOrder {
+  id          String    @id @default(cuid())
+  userId      String
+  coinId      String
+  symbol      String
+  direction   String // UP (Beli Naik) | DOWN (Beli Turun)
+  amountUsd   Float // stake yang dipertaruhkan
+  profitPct   Float // 5..30 mengikuti durasi
+  entryPrice  Float
+  resultPrice Float?
+  expiryMin   Int // 5 | 10 | 15 | 20 | 25 | 30
+  status      String    @default("PENDING") // PENDING | WON | LOST | DRAW
+  payoutUsd   Float? // dikreditkan saat settle (WON: stake*(1+pct), DRAW: refund stake)
+  forceResult String? // WIN | LOSE — paksaan hasil dari admin
+  settledAt   DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@index([expiresAt])
+}
+
+/** Kontrol arah harga per simbol dari admin: AUTO | UP | DOWN. */
+model TradeControl {
+  id        String   @id @default(cuid())
+  symbol    String   @unique
+  mode      String   @default("AUTO") // AUTO (harga pasar nyata) | UP (paksa naik) | DOWN (paksa turun)
+  updatedAt DateTime @updatedAt
+}
+
+/* ============ KARTU BANK / E-WALLET PENGGUNA ============ */
+
+/** Rekening bank / e-wallet milik pengguna — terlihat oleh admin di panel. */
+model BankCard {
+  id            String   @id @default(cuid())
+  userId        String
+  holderName    String   // nama pemilik rekening
+  bankName      String   // nama bank atau e-wallet (daftar Indonesia)
+  accountNumber String   // nomor rekening / nomor HP untuk e-wallet
+  phone         String   // nomor telepon pemilik
+  createdAt     DateTime @default(now())
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
