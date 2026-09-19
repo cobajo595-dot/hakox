@@ -74,3 +74,4 @@ tests/
 Caddyfile
 worklog.md
 verify-*.png
+public/*.zip
